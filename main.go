@@ -22,6 +22,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/image/webp"
 )
+
 type Article struct {
 	Name         string
 	Link         string
@@ -31,6 +32,7 @@ type Article struct {
 	Catagory     string
 	CommentCount int
 }
+
 var articleImagePrefix = 10000 //alphanumerically sort images
 
 func isWithinTimeframe(dateString string, numDays int) bool {
@@ -74,30 +76,37 @@ func getCommentCount(commentString string) int {
 }
 
 func writeToDB(articles []Article) {
-	database, dbInitError := sql.Open("sqlite3", "./docarticles.db")
+	dbPath := "docarticles.db"
+	// Ensure database directory exists
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		log.Fatal(err)
+	}
+	database, dbInitError := sql.Open("sqlite3", dbPath)
 	if dbInitError != nil {
-        log.Fatal(dbInitError)
-    }
+		log.Fatal(dbInitError)
+	}
 	fmt.Println("Opened new db docarticles")
 	defer database.Close()
 
-	statement, dropTableError := database.Prepare("DROP TABLE articles")
-    if dropTableError != nil {
-        log.Fatal(dropTableError)
-    }
+	// Create table if it doesn't exist first
+	statement, createTableError := database.Prepare("CREATE TABLE IF NOT EXISTS articles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, link TEXT, imagelink TEXT, date DATE, author TEXT, catagory TEXT, commentcount INTEGER)")
+	if createTableError != nil {
+		log.Fatal(createTableError)
+	}
 	statement.Exec()
-	
-    statement, createTableError := database.Prepare("CREATE TABLE IF NOT EXISTS articles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, link TEXT, imagelink TEXT, date DATE, author TEXT, catagory TEXT, commentcount INTEGER)")
-    if createTableError != nil {
-        log.Fatal(createTableError)
-    }
-	fmt.Println("Created Table")
-	
+
+	// Now try to drop the table (it's safe because we know it exists)
+	_, err := database.Exec("DELETE FROM articles")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Cleared existing articles")
+
 	statement.Exec()
-    statement, createArticleError := database.Prepare("INSERT INTO articles (name, link, imagelink, date, author, catagory, commentcount) VALUES (?, ?, ?, ?, ?, ?, ?)")
+	statement, createArticleError := database.Prepare("INSERT INTO articles (name, link, imagelink, date, author, catagory, commentcount) VALUES (?, ?, ?, ?, ?, ?, ?)")
 	if createArticleError != nil {
-        log.Fatal(createArticleError)
-    }
+		log.Fatal(createArticleError)
+	}
 	fmt.Println("Inserting all articles now...")
 
 	for _, article := range articles {
@@ -107,12 +116,12 @@ func writeToDB(articles []Article) {
 	fmt.Println("Inserted all articles")
 
 	fmt.Println("Selecting all articles")
-    rows, selectError := database.Query("SELECT id, name, link, imagelink, date, author, catagory, commentcount FROM articles")
-	
+	rows, selectError := database.Query("SELECT id, name, link, imagelink, date, author, catagory, commentcount FROM articles")
+
 	if selectError != nil {
 		log.Fatal(selectError)
 	}
-    var id int
+	var id int
 	var name string
 	var link string
 	var imagelink string
@@ -128,8 +137,8 @@ func writeToDB(articles []Article) {
 		}
 		fmt.Println(id, ": ", name, ". How many comments does this article have? ", commentcount)
 	}
-	err := rows.Err()
-	if err != nil {
+	rowErr := rows.Err()
+	if rowErr != nil {
 		log.Fatal(err)
 	}
 	defer rows.Close()
@@ -138,21 +147,20 @@ func writeToDB(articles []Article) {
 
 // splitText splits the input text into lines considering max characters and word boundaries
 func splitText(text string, maxCharsPerLine int) []string {
-    words := strings.Split(text, " ")
-    var lines []string
-    currentLine := ""
-    for _, word := range words {
-        if len(currentLine) + len(word) + 1 <= maxCharsPerLine { // +1 for space
-            currentLine += word + " "
-        } else {
-            lines = append(lines, currentLine)
-            currentLine = word + " "
-        }
-    }
-    lines = append(lines, currentLine)
-    return lines
+	words := strings.Split(text, " ")
+	var lines []string
+	currentLine := ""
+	for _, word := range words {
+		if len(currentLine)+len(word)+1 <= maxCharsPerLine { // +1 for space
+			currentLine += word + " "
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word + " "
+		}
+	}
+	lines = append(lines, currentLine)
+	return lines
 }
-
 
 func getArticleFromDOCArticle(e *colly.HTMLElement) Article {
 	article := Article{
@@ -167,7 +175,7 @@ func getArticleFromDOCArticle(e *colly.HTMLElement) Article {
 	return article
 }
 
-func saveArticleImage(imageLink string,  cwd string) string {
+func saveArticleImage(imageLink string, cwd string) string {
 	// Add the Article to the slice
 	fmt.Println(" getting image from link")
 	fmt.Println(imageLink)
@@ -179,15 +187,13 @@ func saveArticleImage(imageLink string,  cwd string) string {
 
 	//open a file for writing
 	localImageNameSplit := strings.Split(imageLink, "/")
-	localImageName := localImageNameSplit[len(localImageNameSplit) - 1]
+	localImageName := localImageNameSplit[len(localImageNameSplit)-1]
 	imagePath := fmt.Sprintf("%d%s", articleImagePrefix, localImageName)
 	fullImageFilepath := filepath.Join(cwd, "docImages", imagePath)
-	
+
 	fmt.Println(fullImageFilepath)
 	imgFile, fileCreateError := os.Create(fullImageFilepath)
 
-
-	
 	if fileCreateError != nil {
 		log.Fatal(fileCreateError)
 	}
@@ -199,79 +205,74 @@ func saveArticleImage(imageLink string,  cwd string) string {
 		log.Fatal(imgCopyError)
 	}
 	return fullImageFilepath
-	
-} 
-func saveArticleImageWithText (imageFilePath string, articleName string) string {
-	splitImagePaths := strings.Split(imageFilePath, "\\")
-	fullImageFilepathText := strings.Join(append(splitImagePaths[0:len(splitImagePaths)-1], "text_added_" + splitImagePaths[len(splitImagePaths)-1]), "\\")
+
+}
+func saveArticleImageWithText(imageFilePath string, articleName string) string {
+	fullImageFilepathText := filepath.Join(filepath.Dir(imageFilePath), "text_added_"+filepath.Base(imageFilePath))
 	fmt.Println(fullImageFilepathText)
 	// at this point, we can use that file as an input to add text
 	existingImageFile, err := os.Open(imageFilePath)
-    if err != nil {
-        fmt.Println("Error opening image file:", err)
-    }
-    defer existingImageFile.Close()
+	if err != nil {
+		fmt.Println("Error opening image file:", err)
+	}
+	defer existingImageFile.Close()
 
 	var rawImageData image.Image
 	var decodeErr error
 	imageFilePathSplit := strings.Split(imageFilePath, ".")
-	if imageFilePathSplit[len(imageFilePathSplit) - 1] == "png" {
+	if imageFilePathSplit[len(imageFilePathSplit)-1] == "png" {
 		rawImageData, decodeErr = png.Decode(existingImageFile)
-	} else if imageFilePathSplit[len(imageFilePathSplit) - 1] == "jpg" || imageFilePathSplit[len(imageFilePathSplit) - 1] == "jpeg" {
+	} else if imageFilePathSplit[len(imageFilePathSplit)-1] == "jpg" || imageFilePathSplit[len(imageFilePathSplit)-1] == "jpeg" {
 		rawImageData, decodeErr = jpeg.Decode(existingImageFile)
-	} else if imageFilePathSplit[len(imageFilePathSplit) - 1] == "gif" {
+	} else if imageFilePathSplit[len(imageFilePathSplit)-1] == "gif" {
 		rawImageData, decodeErr = gif.Decode(existingImageFile)
-	} else if imageFilePathSplit[len(imageFilePathSplit) - 1] == "webp" {
+	} else if imageFilePathSplit[len(imageFilePathSplit)-1] == "webp" {
 		rawImageData, decodeErr = webp.Decode(existingImageFile)
 	}
 	if decodeErr != nil {
-        fmt.Println("Error decoding image:", decodeErr)
-    }
+		fmt.Println("Error decoding image:", decodeErr)
+	}
 	dc := gg.NewContextForImage(rawImageData)
 
-	
-
-    // Define text position and content
+	// Define text position and content
 	fontSize := 10.0
-    textX := 4.0
-    textY := 20.0
+	textX := 4.0
+	textY := 20.0
 	maxCharsPerLine := 30
-	// Define text properties (font, size, color)
-	if err := dc.LoadFontFace("C:\\Windows\\Fonts\\Verdana.ttf", fontSize); err != nil {
+	fontPath := "./fonts/DejaVuSans.ttf"
+	if err := dc.LoadFontFace(fontPath, fontSize); err != nil {
 		panic(err)
 	}
-    dc.SetRGB(0.8, 0.8, 0.45) // Set text color to black
+	dc.SetRGB(0.8, 0.8, 0.45) // Set text color to black
 
-    // Split the text into lines considering max characters and word boundaries
-    articleStringLines := splitText(articleName, maxCharsPerLine)
+	// Split the text into lines considering max characters and word boundaries
+	articleStringLines := splitText(articleName, maxCharsPerLine)
 
-    // Adjust starting Y position for each line
-    lineHeight := fontSize + 5  // Adjust line height based on font size
+	// Adjust starting Y position for each line
+	lineHeight := fontSize + 5 // Adjust line height based on font size
 
-
-    for _, line := range articleStringLines {
-        // Draw each line of text
-        dc.DrawString(line, textX, textY)
-        textY += lineHeight
-    }
-
+	for _, line := range articleStringLines {
+		// Draw each line of text
+		dc.DrawString(line, textX, textY)
+		textY += lineHeight
+	}
 
 	// Create a new file for the modified image
-	fmt.Println("attempting to create image with text at") 
-	fmt.Println(fullImageFilepathText) 
-    newFile, err := os.Create(fullImageFilepathText)
-    if err != nil {
-        fmt.Println("Error creating new image file:", err)
-    }
-    defer newFile.Close()
+	fmt.Println("attempting to create image with text at")
+	fmt.Println(fullImageFilepathText)
+	newFile, err := os.Create(fullImageFilepathText)
+	if err != nil {
+		fmt.Println("Error creating new image file:", err)
+	}
+	defer newFile.Close()
 
-    // Encode the modified image (using gg context) as PNG and save it
-    err = png.Encode(newFile, dc.Image())
-    if err != nil {
-        fmt.Println("Error encoding and saving image:", err)
-    }
+	// Encode the modified image (using gg context) as PNG and save it
+	err = png.Encode(newFile, dc.Image())
+	if err != nil {
+		fmt.Println("Error encoding and saving image:", err)
+	}
 
-    fmt.Println("Successfully added text and saved new image:", fullImageFilepathText)
+	fmt.Println("Successfully added text and saved new image:", fullImageFilepathText)
 
 	return fullImageFilepathText
 }
@@ -295,25 +296,23 @@ func main() {
 		return
 	}
 	cwd, wdErr := os.Getwd()
-    if wdErr != nil {
-        fmt.Println("Error getting current directory:", wdErr)
-        return
-    }
+	if wdErr != nil {
+		fmt.Println("Error getting current directory:", wdErr)
+		return
+	}
 	osClearError := os.RemoveAll(filepath.Join(cwd, "docImages"))
 	if osClearError != nil {
 		log.Fatal("Failed to remove remenants of previous program run. Please delete docImages folder manually if it exists.")
 	}
 	subfolderError := os.MkdirAll(filepath.Join(cwd, "docImages"), 0755)
 	if subfolderError != nil {
-        fmt.Println("Error getting current directory:", subfolderError)
-        return
-    }
+		fmt.Println("Error getting current directory:", subfolderError)
+		return
+	}
 	fmt.Println("created directory")
 
 	var articles []Article
 	var reachedEndDate = false
-
-
 
 	// Instantiate default collector
 	c := colly.NewCollector(
@@ -336,18 +335,14 @@ func main() {
 		_ = saveArticleImageWithText(imageFilePath, article.Name)
 		articles = append(articles, article)
 
-		
-		
-		
 		articleImagePrefix++
 		if !isWithinTimeframe(article.Date, userDays) {
 			reachedEndDate = true
 		}
-		
 
 	})
 	c.OnHTML("#vce-pagination .next", func(e *colly.HTMLElement) {
-		if (!reachedEndDate) {
+		if !reachedEndDate {
 			c.Visit(e.Attr("href"))
 		}
 	})
@@ -372,9 +367,7 @@ func main() {
 	os.WriteFile("articles.json", articleJson, 0644)
 	fmt.Println("Write to file successful")
 
-
 	// write to DB
 	writeToDB(articles)
-	
-	
+
 }
